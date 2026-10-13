@@ -5,7 +5,7 @@ import pandas as pd
 import argparse
 
 # Import the logic from our other scripts
-from mapper import process_timesheet
+from mapper import load_templates, process_timesheet
 from pdf2excel import convert as pdf_to_excel
 
 def main():
@@ -26,14 +26,9 @@ def main():
     # 1. Load the empty templates
     # Templates live in the repo's own templates/ folder
     base_path = Path(__file__).resolve().parent / "templates"
-    template_admin_path = base_path / "Admin.xlsx"
-    template_absence_path = base_path / "Absense.xlsx"
-    template_overtime_path = base_path / "overtime.xlsx"
 
     print("Loading templates...")
-    df_admin = pd.read_excel(template_admin_path)
-    df_absence = pd.read_excel(template_absence_path)
-    df_overtime = pd.read_excel(template_overtime_path)
+    df_admin, df_absence, df_overtime = load_templates(base_path)
 
     # 2. Loop through the directory
     # We will process both PDFs (by converting them) and direct .xlsx files if they exist
