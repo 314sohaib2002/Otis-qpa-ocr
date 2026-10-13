@@ -24,8 +24,8 @@ def main():
     output_dir.mkdir(exist_ok=True)
 
     # 1. Load the empty templates
-    # Replace these paths if your templates are stored elsewhere
-    base_path = Path(r"C:\Users\SohaibNM\OneDrive - Otis Global Tenant\Documents\Projects\Otis-qpa-ocr\templates")
+    # Templates live in the repo's own templates/ folder
+    base_path = Path(__file__).resolve().parent / "templates"
     template_admin_path = base_path / "Admin.xlsx"
     template_absence_path = base_path / "Absense.xlsx"
     template_overtime_path = base_path / "overtime.xlsx"
