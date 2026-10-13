@@ -12,6 +12,34 @@ reads the text layer directly with pdfplumber and writes Excel with openpyxl.
 pip install -r requirements.txt
 ```
 
+## Desktop app (timesheet mapper)
+
+```sh
+python gui.py
+```
+
+Add the monthly report PDFs, pick the month from the dropdown and click
+**Process**. Each file is mapped into the built-in Admin / Absence / Overtime
+templates; files for a different month, or that fail validation, are rejected
+and listed with the reason. **Export to Excel...** saves the compiled report.
+The same pipeline is available from the command line with
+`python main.py <folder>`.
+
+### Build the .exe
+
+```sh
+pip install -r requirements.txt -r requirements-build.txt
+pyinstaller --noconfirm --onefile --windowed --name OtisTimesheetMapper ^
+  --add-data "templates/Admin.xlsx;templates" ^
+  --add-data "templates/Absense.xlsx;templates" ^
+  --add-data "templates/overtime.xlsx;templates" ^
+  --collect-all pdfminer --collect-all pdfplumber gui.py
+```
+
+The result is `dist/OtisTimesheetMapper.exe` (the templates are bundled inside).
+`OtisTimesheetMapper.exe --selftest <month-number> <out.txt> <pdf>...` maps the
+PDFs without opening a window and writes a summary, to check a build.
+
 ## Quick start (auto mode)
 
 Detects tables from ruled lines and writes one Excel sheet per table:
