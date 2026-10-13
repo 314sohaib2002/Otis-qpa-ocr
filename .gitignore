@@ -1,2 +1,9 @@
 Timesheet samples/
 pdf2excel.ipynb
+__pycache__/mapper.cpython-314.pyc
+__pycache__/pdf2excel.cpython-314.pyc
+/mapped_output
+templates/Absence file empty template.xlsx
+templates/Admin (1).xlsx
+templates/Admin variable example sheet (1).xlsx
+templates/overtime_work.xlsx
