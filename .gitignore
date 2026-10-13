@@ -7,3 +7,9 @@ templates/Absence file empty template.xlsx
 templates/Admin (1).xlsx
 templates/Admin variable example sheet (1).xlsx
 templates/overtime_work.xlsx
+Kjetil H - Månedsrapport juni 2026 2.pdf
+Månedsrapport 0326_TMA.pdf
+Data/
+dist/
+build/
+*.spec
