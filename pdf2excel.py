@@ -155,6 +155,11 @@ def convert(pdf_path, out_path=None, template_path=None, parse_numbers=True):
                 for j, (bbox, grid) in enumerate(extract_auto(page), start=1):
                     tables.append((f"p{i}_table{j}", bbox, grid))
 
+    if not tables and scanned:
+        raise SystemExit(
+            "This PDF is a scanned image with no text layer, so it cannot be read "
+            "(OCR is not supported). Use the original PDF exported from Excel."
+        )
     if not tables:
         raise SystemExit("No tables found. Try building a template with template_tool.py.")
 
