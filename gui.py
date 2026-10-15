@@ -9,7 +9,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from mapper import MONTH_NAMES
-from pipeline import build_report, report_to_xlsx_bytes
+from pipeline import build_report, extracted_to_xlsx_bytes, report_to_xlsx_bytes
 
 
 class App(tk.Tk):
@@ -21,6 +21,7 @@ class App(tk.Tk):
 
         self.files = []      # paths of the selected PDFs
         self.report = None   # compiled report of the last run
+        self.extracted = {}  # raw PDF -> Excel extraction of the last run, per file
         self.report_month = None
         self.results_queue = queue.Queue()
 
@@ -77,6 +78,9 @@ class App(tk.Tk):
         self.export_btn = ttk.Button(bottom, text="Export to Excel...", command=self.export,
                                      state="disabled")
         self.export_btn.pack(side="right")
+        self.extracted_btn = ttk.Button(bottom, text="Export extracted data...",
+                                        command=self.export_extracted, state="disabled")
+        self.extracted_btn.pack(side="right", padx=(0, 8))
 
     # --- file list ---
     def add_files(self):
@@ -105,6 +109,7 @@ class App(tk.Tk):
         files = list(self.files)
         self.process_btn.config(state="disabled")
         self.export_btn.config(state="disabled")
+        self.extracted_btn.config(state="disabled")
         self.summary_var.set("Processing...")
         self.tree.delete(*self.tree.get_children())
 
@@ -131,8 +136,8 @@ class App(tk.Tk):
             messagebox.showerror("Error", message[1])
             return
 
-        _, month, report, results = message
-        self.report, self.report_month = report, month
+        _, month, report, results, extracted = message
+        self.report, self.report_month, self.extracted = report, month, extracted
         for r in results:
             self.tree.insert("", "end", values=(r["File"], r["Status"], r["Message"]),
                              tags=("rejected",) if r["Status"] != "OK" else ())
@@ -142,6 +147,7 @@ class App(tk.Tk):
             text += " Rejected files are NOT in the report."
         self.summary_var.set(text)
         self.export_btn.config(state="normal" if ok else "disabled")
+        self.extracted_btn.config(state="normal" if extracted else "disabled")
 
     # --- export ---
     def export(self):
@@ -163,7 +169,7 @@ class App(tk.Tk):
 def selftest(month, pdf_paths, out_path):
     """Headless check used to verify a packaged .exe: map the PDFs, write a summary."""
     files = [(Path(p).name, Path(p).read_bytes()) for p in pdf_paths]
-    report, results = build_report(files, int(month))
+    report, results, _ = build_report(files, int(month))
     lines = [f"{r['Status']} | {r['File']} | {r['Message']}" for r in results]
     lines.append("rows: " + ", ".join(f"{k}={len(v)}" for k, v in report.items()))
     lines.append(f"xlsx bytes: {len(report_to_xlsx_bytes(report))}")
