@@ -151,19 +151,27 @@ class App(tk.Tk):
 
     # --- export ---
     def export(self):
-        name = (f"Final_Timesheet_Report_{MONTH_NAMES[self.report_month]}_"
+        self._save("Final_Timesheet_Report", "Export report", "Report",
+                   lambda: report_to_xlsx_bytes(self.report))
+
+    def export_extracted(self):
+        self._save("Extracted_PDF_Data", "Export extracted data", "Extracted data",
+                   lambda: extracted_to_xlsx_bytes(self.extracted))
+
+    def _save(self, prefix, title, label, make_bytes):
+        name = (f"{prefix}_{MONTH_NAMES[self.report_month]}_"
                 f"{datetime.now():%Y-%m-%d_%H-%M-%S}.xlsx")
         path = filedialog.asksaveasfilename(
-            title="Export report", initialfile=name, defaultextension=".xlsx",
+            title=title, initialfile=name, defaultextension=".xlsx",
             filetypes=[("Excel workbook", "*.xlsx")])
         if not path:
             return
         try:
-            Path(path).write_bytes(report_to_xlsx_bytes(self.report))
+            Path(path).write_bytes(make_bytes())
         except OSError as e:
             messagebox.showerror("Could not save", f"{e}\n\nIs the file open in Excel?")
             return
-        messagebox.showinfo("Exported", f"Report saved to:\n{path}")
+        messagebox.showinfo("Exported", f"{label} saved to:\n{path}")
 
 
 def selftest(month, pdf_paths, out_path):
