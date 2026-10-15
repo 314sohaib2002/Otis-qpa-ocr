@@ -1,4 +1,5 @@
 import math
+import re
 
 import openpyxl
 import pandas as pd
@@ -19,6 +20,9 @@ SUM_LABEL = "sum denne"
 # Row (1-based) holding the real column headers in each template workbook; the rows
 # above it are titles/instructions and the rows below it are example/legend text.
 TEMPLATE_HEADER_ROWS = {"Admin": 1, "Absence": 4, "Overtime": 8}
+# Absence sheet columns (0-based): D = absence code, E = absence type
+ABSENCE_CODE_COLUMN = 3
+ABSENCE_TYPE_COLUMN = 4
 
 # Month labels as they appear in the report (Norwegian, plus English) -> month number
 MONTH_ALIASES = {
@@ -36,15 +40,24 @@ def month_number(label):
     return next((n for n, names in MONTH_ALIASES.items() if text in names), None)
 
 
-# Standard wage code names, as listed in the legend of the Overtime template
+# Wage codes: the old payroll code (as printed in the templates) -> the updated code.
+# Only these five change; every other code (e.g. 52) is used as-is.
+WAGE_CODE_UPDATES = {118: 2031, 61: 2190, 62: 2200, 425: 2040, 426: 2050}
+
+# Standard wage code names, keyed by the updated codes
 WAGE_CODE_NAMES = {
-    118: "Overtime hours for pay out",
-    425: "Overtime add 50%",
-    426: "Overtime add 100%",
-    61: "Overtime hours for time off",
-    62: "Withdrawal of time off",
+    2031: "Overtime hours for pay out",
+    2040: "Overtime add 50%",
+    2050: "Overtime add 100%",
+    2190: "Overtime hours for time off",
+    2200: "Withdrawal of time off",
     52: "Timebank payout",
 }
+
+# Absence codes (see the absence code reference table in the Absence template)
+ABSENCE_CODE_HOLIDAY = 80
+ABSENCE_CODE_SELF_DECLARATION = 2
+ABSENCE_CODE_SICK_EMPLOYER = 1
 
 
 def clean_val(val):
@@ -103,16 +116,31 @@ def _empty_template(path, header_row):
     return pd.DataFrame(columns=names)
 
 
+def _update_wage_codes_in_header(name):
+    """Replace old wage codes in a header label ('WT 118' -> 'WT 2031')."""
+    return re.sub(r"\d+", lambda m: str(WAGE_CODE_UPDATES.get(int(m.group()), m.group())), name)
+
+
 def load_templates(base_path):
     """Load the Admin, Absence and Overtime templates as empty DataFrames.
 
     Only the header row is kept, so the instruction/legend text in the templates
     never ends up as data rows in the compiled report.
     """
-    return tuple(
+    df_admin, df_absence, df_overtime = (
         _empty_template(base_path / f"{file}.xlsx", TEMPLATE_HEADER_ROWS[name])
         for name, file in (("Admin", "Admin"), ("Absence", "Absense"), ("Overtime", "overtime"))
     )
+    # Wage code headers of the Admin sheet (columns G-L) show the updated codes
+    df_admin.columns = [
+        _update_wage_codes_in_header(c) if 6 <= i <= 11 else c
+        for i, c in enumerate(df_admin.columns)
+    ]
+    # The Absence code goes in the (unlabelled) column next to "Absence type"
+    absence_columns = list(df_absence.columns)
+    absence_columns[ABSENCE_CODE_COLUMN] = "Absence code"
+    df_absence.columns = absence_columns
+    return df_admin, df_absence, df_overtime
 
 
 def find_sum_row(sheet):
@@ -216,7 +244,22 @@ def process_timesheet(input_excel_path, df_admin, df_absence, df_overtime, expec
             else:
                 self_report_dates.append(str(day_int))
 
-    vacation_dates_str = ", ".join(vacation_dates)
+    month_str = clean_val(sheet["I2"].value)  # e.g. "Jun"
+    # The year sits in K2 in the PDF export (J2 holds the "ÅR:" label); fall back to J2
+    # for sheets where the label is merged away. Only accept a real 4-digit year.
+    year_str = ""
+    for addr in ("K2", "J2"):
+        candidate = clean_val(sheet[addr].value)
+        if candidate.isdigit() and len(candidate) == 4:
+            year_str = candidate
+            break
+
+    def format_date(day):
+        return f"{day}-{month_str}-{year_str}"
+
+    if vacation_dates and not year_str:
+        raise ValueError("Year (K2) not found - cannot add the year to the vacation dates.")
+    vacation_dates_str = ", ".join(format_date(d) for d in vacation_dates)
     self_report_dates_str = ", ".join(self_report_dates)
     sick_leave_dates_str = ", ".join(sick_leave_dates)
 
@@ -270,24 +313,12 @@ def process_timesheet(input_excel_path, df_admin, df_absence, df_overtime, expec
     cert_sick_groups = group_consecutive_days(sick_leave_dates)
 
     absence_rows = []
-    month_str = clean_val(sheet["I2"].value) # e.g. "Jun"
-    # The year sits in K2 in the PDF export (J2 holds the "ÅR:" label); fall back to J2
-    # for sheets where the label is merged away. Only accept a real 4-digit year.
-    year_str = ""
-    for addr in ("K2", "J2"):
-        candidate = clean_val(sheet[addr].value)
-        if candidate.isdigit() and len(candidate) == 4:
-            year_str = candidate
-            break
-
-    def format_date(day):
-        return f"{day}-{month_str}-{year_str}"
-
     for grp in vacation_groups:
         row_data = [None] * len(df_absence.columns)
         row_data[1] = employee_id
         row_data[2] = employee_name
-        row_data[4] = "Ferie (Vacation)"
+        row_data[ABSENCE_CODE_COLUMN] = ABSENCE_CODE_HOLIDAY
+        row_data[ABSENCE_TYPE_COLUMN] = "Ferie (Vacation)"
         row_data[5] = "100%"
         row_data[6] = format_date(grp["from"])
         row_data[7] = format_date(grp["to"])
@@ -298,7 +329,8 @@ def process_timesheet(input_excel_path, df_admin, df_absence, df_overtime, expec
         row_data = [None] * len(df_absence.columns)
         row_data[1] = employee_id
         row_data[2] = employee_name
-        row_data[4] = "2"
+        row_data[ABSENCE_CODE_COLUMN] = ABSENCE_CODE_SELF_DECLARATION
+        row_data[ABSENCE_TYPE_COLUMN] = "Self declaration"
         row_data[5] = "100%"
         row_data[6] = format_date(grp["from"])
         row_data[7] = format_date(grp["to"])
@@ -309,7 +341,8 @@ def process_timesheet(input_excel_path, df_admin, df_absence, df_overtime, expec
         row_data = [None] * len(df_absence.columns)
         row_data[1] = employee_id
         row_data[2] = employee_name
-        row_data[4] = "Syk med legeerklæring"
+        row_data[ABSENCE_CODE_COLUMN] = ABSENCE_CODE_SICK_EMPLOYER
+        row_data[ABSENCE_TYPE_COLUMN] = "Syk med legeerklæring"
         row_data[5] = "100%"
         row_data[6] = format_date(grp["from"])
         row_data[7] = format_date(grp["to"])
@@ -325,11 +358,11 @@ def process_timesheet(input_excel_path, df_admin, df_absence, df_overtime, expec
     # 3. PROCESS OVERTIME TEMPLATE
     # ==========================================
     wage_entries = [
-        (118, to_number(overtime_payout) or 0),
-        (425, to_number(overtime_50) or 0),
-        (426, to_number(overtime_100) or 0),
-        (61,  to_number(overtime_for_time_off) or 0),
-        (62,  to_number(time_off_withdrawal) or 0),
+        (WAGE_CODE_UPDATES[118], to_number(overtime_payout) or 0),
+        (WAGE_CODE_UPDATES[425], to_number(overtime_50) or 0),
+        (WAGE_CODE_UPDATES[426], to_number(overtime_100) or 0),
+        (WAGE_CODE_UPDATES[61],  to_number(overtime_for_time_off) or 0),
+        (WAGE_CODE_UPDATES[62],  to_number(time_off_withdrawal) or 0),
         (52,  to_number(timebank_payout) or 0),
     ]
 
