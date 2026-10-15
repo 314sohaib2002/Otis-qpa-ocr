@@ -72,7 +72,7 @@ def extracted_to_xlsx_bytes(extracted):
     wb.remove(wb.active)
     used = set()
     for name, rows in extracted.items():
-        base = re.sub(r"[\/*?:\[\]]", "_", Path(name).stem)[:28] or "Sheet"
+        base = re.sub(r"[\\/*?:\[\]]", "_", Path(name).stem)[:28] or "Sheet"
         title, n = base, 1
         while title.casefold() in used:
             n += 1
