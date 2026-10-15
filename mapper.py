@@ -1,3 +1,4 @@
+import difflib
 import math
 import re
 
@@ -58,6 +59,13 @@ WAGE_CODE_NAMES = {
 ABSENCE_CODE_HOLIDAY = 80
 ABSENCE_CODE_SELF_DECLARATION = 2
 ABSENCE_CODE_SICK_EMPLOYER = 1
+
+
+def is_self_report(comment):
+    """True when a day comment says the sick day was self-reported ('Syk - egenmelding').
+    Fuzzy, because comments from scanned sheets are OCR text ('erenmelding')."""
+    words = re.findall(r"[a-zæøå]+", str(comment).casefold())
+    return any(difflib.SequenceMatcher(None, w, "egenmelding").ratio() >= 0.75 for w in words)
 
 
 def clean_val(val):
@@ -239,7 +247,7 @@ def process_timesheet(input_excel_path, df_admin, df_absence, df_overtime, expec
         d_val = sheet[f"D{row}"].value
 
         if j_val is not None and j_val > 0:
-            if d_val and str(d_val).strip() != "":
+            if d_val and str(d_val).strip() != "" and not is_self_report(d_val):
                 sick_leave_dates.append(str(day_int))
             else:
                 self_report_dates.append(str(day_int))

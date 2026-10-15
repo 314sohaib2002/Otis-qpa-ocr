@@ -9,9 +9,10 @@ from pathlib import Path
 
 import openpyxl
 import pandas as pd
+import pdfplumber
 
 from mapper import load_templates, process_timesheet
-from pdf2excel import convert as pdf_to_excel
+from pdf2excel import convert as pdf_to_excel, has_text_layer
 
 # When packaged with PyInstaller the templates are unpacked next to the code in _MEIPASS
 _BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -39,19 +40,38 @@ def build_report(files, expected_month=None):
                 pdf_path = Path(tmp) / f"{i}.pdf"
                 pdf_path.write_bytes(data)
                 # A windowed .exe has no console, so keep library output off stdout/stderr
-                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                    xlsx_path = pdf_to_excel(pdf_path)
-                extracted[name] = _sheet_rows(xlsx_path)
+                message = ""
+                if _is_scanned(pdf_path):
+                    # A scan has no text layer: read it with OCR (values are cross-checked)
+                    from ocr_timesheet import scanned_pdf_to_excel
+                    xlsx_path = Path(tmp) / f"{i}.xlsx"
+                    try:
+                        scanned_pdf_to_excel(pdf_path, xlsx_path)
+                    finally:  # keep what was read even if the checks failed
+                        if xlsx_path.exists():
+                            extracted[name] = _sheet_rows(xlsx_path)
+                    message = "Scanned PDF read with OCR - check it in 'Export extracted data'."
+                else:
+                    with contextlib.redirect_stdout(io.StringIO()), \
+                            contextlib.redirect_stderr(io.StringIO()):
+                        xlsx_path = pdf_to_excel(pdf_path)
+                    extracted[name] = _sheet_rows(xlsx_path)
                 # Map into copies so a failure half-way never leaves partial rows behind
                 df_admin, df_absence, df_overtime = process_timesheet(
                     xlsx_path, df_admin, df_absence, df_overtime, expected_month
                 )
-                results.append({"File": name, "Status": "OK", "Message": ""})
+                results.append({"File": name, "Status": "OK", "Message": message})
             except (Exception, SystemExit) as e:
                 results.append({"File": name, "Status": "Rejected", "Message": str(e)})
 
     report = {"Admin": df_admin, "Absence": df_absence, "Overtime": df_overtime}
     return report, results, extracted
+
+
+def _is_scanned(pdf_path):
+    """True when no page of the PDF has a text layer (a scan/photo of a printout)."""
+    with pdfplumber.open(pdf_path) as pdf:
+        return not any(has_text_layer(page) for page in pdf.pages)
 
 
 def _sheet_rows(xlsx_path):

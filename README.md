@@ -1,7 +1,7 @@
 # Otis-qpa-ocr
 
 Accurate PDF → Excel table extraction for born-digital PDFs (PDFs exported
-from Excel with a fixed template). Despite the repo name, **no OCR is used**:
+from Excel with a fixed template). Despite the repo name, **no OCR is used for them**:
 these PDFs carry a lossless embedded text layer, and research shows native
 extraction reaches ~100% accuracy where OCR tops out around 97–99%. The tool
 reads the text layer directly with pdfplumber and writes Excel with openpyxl.
@@ -39,6 +39,20 @@ pyinstaller --noconfirm --onefile --windowed --name OtisTimesheetMapper ^
 The result is `dist/OtisTimesheetMapper.exe` (the templates are bundled inside).
 `OtisTimesheetMapper.exe --selftest <month-number> <out.txt> <pdf>...` maps the
 PDFs without opening a window and writes a summary, to check a build.
+
+## Scanned timesheets (OCR)
+
+Timesheets that were printed, signed and scanned have no text layer. They are read
+with OCR (`ocr_timesheet.py`): the table grid is located from its ruled lines, every
+cell is read on its own, and the result is cross-checked against the totals printed on
+the sheet (hours, sick days, vacation days, remaining holiday). A sheet that fails a
+check is rejected instead of being mapped with wrong numbers. Names and comments are
+free text and may contain OCR typos - use **Export extracted data** to review them.
+
+This needs the Tesseract program installed
+(<https://github.com/UB-Mannheim/tesseract/wiki>, default path
+`C:\Program Files\Tesseract-OCR`). It is not bundled in the .exe. A scan takes about a
+minute.
 
 ## Quick start (auto mode)
 
