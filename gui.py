@@ -116,7 +116,12 @@ class App(tk.Tk):
         def work():
             try:
                 data = [(Path(p).name, Path(p).read_bytes()) for p in files]
-                self.results_queue.put(("done", month, *build_report(data, month)))
+                def progress(done, total, name, is_scan):
+                    note = " - scanned, reading with OCR (about a minute)" if is_scan else ""
+                    self.results_queue.put(
+                        ("progress", f"Processing file {done + 1} of {total}: {name}{note}"))
+
+                self.results_queue.put(("done", month, *build_report(data, month, progress)))
             except Exception as e:
                 self.results_queue.put(("error", str(e)))
 
@@ -127,6 +132,11 @@ class App(tk.Tk):
         try:
             message = self.results_queue.get_nowait()
         except queue.Empty:
+            self.after(100, self._poll)
+            return
+
+        if message[0] == "progress":
+            self.summary_var.set(message[1])
             self.after(100, self._poll)
             return
 

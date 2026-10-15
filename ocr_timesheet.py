@@ -14,6 +14,7 @@ Needs the Tesseract program (https://github.com/UB-Mannheim/tesseract/wiki).
 
 import calendar
 import difflib
+import os
 import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
@@ -30,8 +31,12 @@ GRID_COLUMNS = 12  # 11 table columns A-K -> 12 vertical lines
 FIRST_ROWS = 5  # lines above the first day row: title, name, header(2 lines merged), carry-over
 BLOCK_ROWS = 8  # lines from the SUM row down to the bottom of the sheet
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Des"]
-OCR_WORKERS = 6  # parallel Tesseract processes
+OCR_WORKERS = min(12, os.cpu_count() or 4)  # parallel Tesseract processes
 TOLERANCE = 0.05  # hours; the sheets print totals with 1-2 decimals
+
+# Each Tesseract process would otherwise start one thread per core; with many processes
+# running in parallel that oversubscribes the CPU and is slower overall
+os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
 _WINDOWS_TESSERACT = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
 
@@ -67,11 +72,17 @@ def _deskew(gray):
     dark = (gray < 110).astype(np.uint8) * 255
     horizontal = cv2.morphologyEx(dark, cv2.MORPH_OPEN,
                                   cv2.getStructuringElement(cv2.MORPH_RECT, (150, 1)))
-    lines = cv2.HoughLinesP(horizontal, 1, np.pi / 3600, 150, minLineLength=500, maxLineGap=30)
-    if lines is None:
+    # Angle of every long horizontal ruled line (a fitted line per connected piece)
+    contours, _ = cv2.findContours(horizontal, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    angles = []
+    for contour in contours:
+        if cv2.boundingRect(contour)[2] < 500:
+            continue
+        vx, vy, _, _ = cv2.fitLine(contour, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
+        angles.append(float(np.degrees(np.arctan2(vy, vx))))
+    if not angles:
         return gray
-    angle = float(np.median([np.degrees(np.arctan2(y2 - y1, x2 - x1))
-                             for x1, y1, x2, y2 in lines[:, 0]]))
+    angle = float(np.median(angles))
     if abs(angle) < 0.05 or abs(angle) > 5:
         return gray
     h, w = gray.shape
@@ -126,7 +137,7 @@ def _drop_line_fragments(ink):
     return keep
 
 
-def _cell_image(gray, x0, x1, y0, y1, scale=1.5, thin=0):
+def _cell_image(gray, x0, x1, y0, y1, scale=1.5, thin=0, min_ink=40):
     margin = 6  # stay clear of the ruled lines
     crop = gray[y0 + margin:y1 - margin, x0 + margin:x1 - margin]
     if crop.size == 0:
@@ -136,7 +147,7 @@ def _cell_image(gray, x0, x1, y0, y1, scale=1.5, thin=0):
     if ink.sum() < 25:
         return None  # empty cell
     ink = _drop_line_fragments(ink)
-    if ink.sum() < 40:
+    if ink.sum() < min_ink:
         return None
     if thin:  # heavily inked glyphs (a bold '1') become blobs; thinning restores the shape
         ink = cv2.erode(ink.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=thin) > 0
@@ -178,6 +189,16 @@ def _number_text(gray, x0, x1, y0, y1, two_decimals=False):
     Retries with other scales/thinning when Tesseract returns nothing. With
     two_decimals (the day columns always print 0,00 / 7,50 ...) every read is voted on,
     because a single read can be wrong yet well-formed (0,00 read as 0,90)."""
+    if two_decimals:
+        # Fast path: two independent reads (different scale) that agree are accepted
+        quick = []
+        for scale in (1.5, 3.0):
+            image = _cell_image(gray, x0, x1, y0, y1, scale)
+            if image is None:
+                return ""
+            quick.append(_clean_number(_read(image, "0123456789,.-", 7)).replace(".", ","))
+        if quick[0] == quick[1] and _TWO_DECIMALS.match(quick[0]):
+            return quick[0]
     votes, order = {}, []
     reads = 0
     for scale, thin in _VARIANTS:
@@ -248,7 +269,7 @@ def _month(gray, x0, x1, y0, y1):
 # --------------------------------------------------------------------------
 # Whole sheet
 # --------------------------------------------------------------------------
-def read_scanned_timesheet(pdf_path):
+def read_scanned_timesheet(pdf_path, expected_month=None):
     """Returns (rows, problems): the sheet as a list of rows (A1 = rows[0][0]) in the
     pdf2excel layout, and a list of failed cross-checks (empty when all is consistent)."""
     pytesseract.pytesseract.tesseract_cmd = _find_tesseract()
@@ -270,7 +291,12 @@ def read_scanned_timesheet(pdf_path):
     put(2, 0, "NAVN:")
     put(2, 1, _text(name_img))
     put(2, 5, int(_number_text(gray, *cell(5, 1, 6)) or 0) or None)
-    put(2, 8, _month(gray, *cell(8, 1)))
+    month = _month(gray, *cell(8, 1))
+    put(2, 8, month)
+    if expected_month is not None and MONTHS.index(month) + 1 != expected_month:
+        # Stop before the slow part: this sheet is not wanted
+        raise OcrError(f"This timesheet is for '{month}', not "
+                       f"{calendar.month_name[expected_month]}.")
     year = _number_text(gray, *cell(10, 1)).strip(".,-")
     put(2, 10, int(year) if year.isdigit() else None)
     problems = []
@@ -301,7 +327,8 @@ def read_scanned_timesheet(pdf_path):
             if not text and letter in ("J", "K") and _looks_like_one(gray, *box):
                 text = "1"
             values[col] = text
-        comment = _text(_cell_image(gray, *cell(3, grid_row)), psm=6) or None
+        # a real comment has much more ink than the speckle of the blue fill
+        comment = _text(_cell_image(gray, *cell(3, grid_row), min_ink=250), psm=6) or None
         return values, comment
 
     sums = {"E": 0.0, "J": 0.0, "K": 0.0}
@@ -364,10 +391,10 @@ def read_scanned_timesheet(pdf_path):
     return matrix, problems
 
 
-def scanned_pdf_to_excel(pdf_path, out_path):
+def scanned_pdf_to_excel(pdf_path, out_path, expected_month=None):
     """OCR a scanned timesheet into an .xlsx laid out like pdf2excel's output.
     Raises OcrError (with the failed checks) when the values are not consistent."""
-    matrix, problems = read_scanned_timesheet(pdf_path)
+    matrix, problems = read_scanned_timesheet(pdf_path, expected_month)
     wb = openpyxl.Workbook()
     ws = wb.active
     for row in matrix:

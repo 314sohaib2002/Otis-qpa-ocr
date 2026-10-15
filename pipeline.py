@@ -19,7 +19,7 @@ _BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 TEMPLATES_DIR = _BASE_DIR / "templates"
 
 
-def build_report(files, expected_month=None):
+def build_report(files, expected_month=None, progress=None):
     """files: list of (file_name, pdf_bytes). Returns (report, results, extracted).
 
     report is {"Admin": df, "Absence": df, "Overtime": df}; results is one dict per
@@ -29,6 +29,9 @@ def build_report(files, expected_month=None):
     extracted is {file_name: rows}: the raw PDF -> Excel extraction of every file whose
     PDF could be read (also the rejected ones), as lists of cell values, so the user
     can check what was read from each PDF before it was mapped.
+
+    progress(done, total, name, is_scan) is called before each file so a UI can show
+    where it is (a scan takes about a minute).
     """
     df_admin, df_absence, df_overtime = load_templates(TEMPLATES_DIR)
     results = []
@@ -39,14 +42,17 @@ def build_report(files, expected_month=None):
             try:
                 pdf_path = Path(tmp) / f"{i}.pdf"
                 pdf_path.write_bytes(data)
+                scanned = _is_scanned(pdf_path)
+                if progress:
+                    progress(i, len(files), name, scanned)
                 # A windowed .exe has no console, so keep library output off stdout/stderr
                 message = ""
-                if _is_scanned(pdf_path):
+                if scanned:
                     # A scan has no text layer: read it with OCR (values are cross-checked)
                     from ocr_timesheet import scanned_pdf_to_excel
                     xlsx_path = Path(tmp) / f"{i}.xlsx"
                     try:
-                        scanned_pdf_to_excel(pdf_path, xlsx_path)
+                        scanned_pdf_to_excel(pdf_path, xlsx_path, expected_month)
                     finally:  # keep what was read even if the checks failed
                         if xlsx_path.exists():
                             extracted[name] = _sheet_rows(xlsx_path)
