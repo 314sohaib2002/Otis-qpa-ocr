@@ -63,9 +63,13 @@ ABSENCE_CODE_SICK_EMPLOYER = 1
 
 def is_self_report(comment):
     """True when a day comment says the sick day was self-reported ('Syk - egenmelding').
-    Fuzzy, because comments from scanned sheets are OCR text ('erenmelding')."""
-    words = re.findall(r"[a-zæøå]+", str(comment).casefold())
-    return any(difflib.SequenceMatcher(None, w, "egenmelding").ratio() >= 0.75 for w in words)
+    Fuzzy, because comments from scanned sheets are OCR text ('erenmelding',
+    'egenme ding')."""
+    letters = "".join(re.findall(r"[a-zæøå]+", str(comment).casefold()))
+    word = "egenmelding"
+    windows = (letters[i:i + n] for n in range(len(word) - 2, len(word) + 2)
+               for i in range(max(len(letters) - n + 1, 0)))
+    return any(difflib.SequenceMatcher(None, w, word).ratio() >= 0.8 for w in windows)
 
 
 def clean_val(val):

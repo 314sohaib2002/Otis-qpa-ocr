@@ -171,6 +171,8 @@ def _text(image, psm=7):
 
 
 _TWO_DECIMALS = re.compile(r"^-?\d+,\d\d$|^-+$")
+_ANY_NUMBER = re.compile(r"^-?\d+(?:,\d{1,2})?$|^-+$")
+_INTEGER = re.compile(r"^\d+$")
 _VARIANTS = ((1.5, 0), (3.0, 0), (3.0, 1), (3.0, 2), (4.5, 1))  # (scale, thinning)
 
 
@@ -183,13 +185,14 @@ def _clean_number(text):
     return "" if not text.strip(".,") else text
 
 
-def _number_text(gray, x0, x1, y0, y1, two_decimals=False):
+def _number_text(gray, x0, x1, y0, y1, shape=None):
     """Text of a numeric cell: '7,50', '-', '' ...
 
-    Retries with other scales/thinning when Tesseract returns nothing. With
-    two_decimals (the day columns always print 0,00 / 7,50 ...) every read is voted on,
-    because a single read can be wrong yet well-formed (0,00 read as 0,90)."""
-    if two_decimals:
+    Retries with other scales/thinning when Tesseract returns nothing. With a `shape`
+    (regex of what the cell can hold, e.g. _TWO_DECIMALS for 0,00 / 7,50) the reads are
+    voted on, because a single read can be wrong yet well-formed (0,00 read as 0,90 or
+    800). Without a shape the first usable read is returned."""
+    if shape:
         # Fast path: two independent reads (different scale) that agree are accepted
         quick = []
         for scale in (1.5, 3.0):
@@ -197,10 +200,9 @@ def _number_text(gray, x0, x1, y0, y1, two_decimals=False):
             if image is None:
                 return ""
             quick.append(_clean_number(_read(image, "0123456789,.-", 7)).replace(".", ","))
-        if quick[0] == quick[1] and _TWO_DECIMALS.match(quick[0]):
+        if quick[0] == quick[1] and shape.match(quick[0]):
             return quick[0]
     votes, order = {}, []
-    reads = 0
     for scale, thin in _VARIANTS:
         image = _cell_image(gray, x0, x1, y0, y1, scale, thin)
         if image is None:
@@ -209,11 +211,10 @@ def _number_text(gray, x0, x1, y0, y1, two_decimals=False):
             text = _clean_number(_read(image, "0123456789,.-", psm))
             if not text:
                 continue
-            if not two_decimals:
+            if not shape:
                 return text  # first usable read (callers cross-check the totals)
-            reads += 1
             normal = text.replace(".", ",")
-            if _TWO_DECIMALS.match(normal):
+            if shape.match(normal):
                 if normal not in votes:
                     order.append(normal)
                 votes[normal] = votes.get(normal, 0) + 1
@@ -290,14 +291,14 @@ def read_scanned_timesheet(pdf_path, expected_month=None):
     name_img = _cell_image(gray, *cell(1, 1, 3))
     put(2, 0, "NAVN:")
     put(2, 1, _text(name_img))
-    put(2, 5, int(_number_text(gray, *cell(5, 1, 6)) or 0) or None)
+    put(2, 5, int(_number_text(gray, *cell(5, 1, 6), shape=_INTEGER) or 0) or None)
     month = _month(gray, *cell(8, 1))
     put(2, 8, month)
     if expected_month is not None and MONTHS.index(month) + 1 != expected_month:
         # Stop before the slow part: this sheet is not wanted
         raise OcrError(f"This timesheet is for '{month}', not "
                        f"{calendar.month_name[expected_month]}.")
-    year = _number_text(gray, *cell(10, 1)).strip(".,-")
+    year = _number_text(gray, *cell(10, 1), shape=_INTEGER)
     put(2, 10, int(year) if year.isdigit() else None)
     problems = []
 
@@ -308,10 +309,10 @@ def read_scanned_timesheet(pdf_path, expected_month=None):
             problems.append(f"unreadable number '{text}' at {where}")
             return None
 
-    carry = _number_text(gray, *cell(4, 4))
+    carry = _number_text(gray, *cell(4, 4), shape=_TWO_DECIMALS)
     put(5, 4, number(carry, "E5") if carry not in ("", "-") else carry or None)
     put(5, 5, "Gjenværende feriedager")
-    holiday_left = number(_number_text(gray, *cell(10, 4)), "K5")
+    holiday_left = number(_number_text(gray, *cell(10, 4), shape=_ANY_NUMBER), "K5")
     put(5, 10, holiday_left)
 
     # --- one row per day (rows are independent, so read them in parallel) ---
@@ -323,7 +324,7 @@ def read_scanned_timesheet(pdf_path, expected_month=None):
         values = {}
         for col, letter in day_columns:
             box = cell(col, grid_row)
-            text = _number_text(gray, *box, two_decimals=letter not in ("J", "K"))
+            text = _number_text(gray, *box, shape=None if letter in ("J", "K") else _TWO_DECIMALS)
             if not text and letter in ("J", "K") and _looks_like_one(gray, *box):
                 text = "1"
             values[col] = text
@@ -353,18 +354,18 @@ def read_scanned_timesheet(pdf_path, expected_month=None):
     put(sum_row, 0, "SUM denne måned")
     totals = {}
     for col, letter in ((4, "E"), (7, "H"), (8, "I"), (9, "J"), (10, "K")):
-        text = _number_text(gray, *cell(col, sum_grid))
+        text = _number_text(gray, *cell(col, sum_grid), shape=_ANY_NUMBER)
         totals[letter] = number(text, f"{letter}{sum_row}")
         put(sum_row, col, totals[letter] if totals[letter] is not None else (text or None))
     for offset, label in ((1, "Sum overtid denne måneden"), (2, "Overtidstimer til avspasering"),
                           (3, "Overtidstimer til utbetaling"),
                           (4, "Time saldo overføres til neste måned Månedslønnede")):
         put(sum_row + offset, 0, label)
-        text = _number_text(gray, *cell(4, sum_grid + offset))
+        text = _number_text(gray, *cell(4, sum_grid + offset), shape=_TWO_DECIMALS)
         put(sum_row + offset, 4, number(text, f"E{sum_row + offset}")
             if text not in ("", "-") else (text or None))
     put(sum_row + 5, 5, "Restferie:")
-    remaining = number(_number_text(gray, *cell(10, sum_grid + 5)), f"K{sum_row + 5}")
+    remaining = number(_number_text(gray, *cell(10, sum_grid + 5), shape=_ANY_NUMBER), f"K{sum_row + 5}")
     put(sum_row + 5, 10, remaining)
 
     # --- cross-checks against the totals printed on the sheet ---

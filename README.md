@@ -33,10 +33,15 @@ pyinstaller --noconfirm --onefile --windowed --name OtisTimesheetMapper ^
   --add-data "templates/Admin.xlsx;templates" ^
   --add-data "templates/Absense.xlsx;templates" ^
   --add-data "templates/overtime.xlsx;templates" ^
-  --collect-all pdfminer --collect-all pdfplumber gui.py
+  --collect-all pdfminer --collect-all pdfplumber ^
+  --hidden-import ocr_timesheet --collect-submodules cv2 ^
+  --exclude-module torch --exclude-module torchvision --exclude-module matplotlib ^
+  --exclude-module scipy --exclude-module sklearn --exclude-module IPython ^
+  gui.py
 ```
 
-The result is `dist/OtisTimesheetMapper.exe` (the templates are bundled inside).
+The result is `dist/OtisTimesheetMapper.exe` (the templates are bundled inside; Tesseract for scanned PDFs is not,
+it must be installed on the machine that runs the .exe).
 `OtisTimesheetMapper.exe --selftest <month-number> <out.txt> <pdf>...` maps the
 PDFs without opening a window and writes a summary, to check a build.
 
